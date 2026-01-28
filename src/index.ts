@@ -36,7 +36,7 @@ import configErrorHtml from './assets/config-error.html';
  */
 function transformErrorMessage(message: string, host: string): string {
   if (message.includes('gateway token missing')) {
-    return `Token missing. Visit https://${host}?token=CLAWDBOT_GATEWAY_TOKEN`;
+    return `Token missing. Visit https://${host}?token={REPLACE_WITH_YOUR_TOKEN}`;
   }
   
   if (message.includes('pairing required')) {
