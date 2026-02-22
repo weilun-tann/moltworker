@@ -1,0 +1,11 @@
+{
+  "skills": [
+    { "slug": "pskoett/self-improving-agent" },
+    { "slug": "arun-8687/tavily-search" },
+    { "slug": "oswalpalash/ontology" },
+    { "slug": "biostartechnology/humanizer" },
+    { "slug": "steipete/openai-whisper" },
+    { "slug": "NicholasSpisak/clawddocs" },
+    { "slug": "steipete/clawdhub" }
+  ]
+}

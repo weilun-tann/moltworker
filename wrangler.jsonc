@@ -1,5 +1,6 @@
 {
   "$schema": "node_modules/wrangler/config-schema.json",
+  "account_id": "f604265e73ee0e6a0519b475081d4c4e",
   "name": "moltbot-sandbox",
   "main": "src/index.ts",
   "compatibility_date": "2025-05-06",
@@ -39,6 +40,8 @@
       "image": "./Dockerfile",
       "instance_type": "standard-1",
       "max_instances": 1,
+      // Give the old container 5 min grace before it's eligible for update
+      "rollout_active_grace_period": 300,
     },
   ],
   "durable_objects": {

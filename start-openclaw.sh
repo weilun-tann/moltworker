@@ -219,6 +219,42 @@ if (process.env.CF_AI_GATEWAY_MODEL) {
     }
 }
 
+// Direct provider override: when OPENAI_API_KEY is set but ANTHROPIC_API_KEY is not,
+// switch the default model to OpenAI so the restored R2 config doesn't try Anthropic
+if (process.env.OPENAI_API_KEY && !process.env.ANTHROPIC_API_KEY) {
+    config.models = config.models || {};
+    config.models.providers = config.models.providers || {};
+    config.models.providers['openai'] = {
+        baseUrl: 'https://api.openai.com/v1',
+        apiKey: process.env.OPENAI_API_KEY,
+        api: 'openai-completions',
+        models: [
+            { id: 'gpt-5.2', name: 'gpt-5.2', contextWindow: 128000, maxTokens: 16384 },
+            { id: 'gpt-4o', name: 'gpt-4o', contextWindow: 128000, maxTokens: 16384 },
+            { id: 'gpt-4o-mini', name: 'gpt-4o-mini', contextWindow: 128000, maxTokens: 16384 },
+        ],
+    };
+    config.agents = config.agents || {};
+    config.agents.defaults = config.agents.defaults || {};
+    config.agents.defaults.model = { primary: 'openai/gpt-5.2' };
+    console.log('Provider override: using OpenAI (gpt-5.2) as default');
+} else if (process.env.ANTHROPIC_API_KEY && !process.env.OPENAI_API_KEY) {
+    config.models = config.models || {};
+    config.models.providers = config.models.providers || {};
+    config.models.providers['anthropic'] = {
+        baseUrl: 'https://api.anthropic.com',
+        apiKey: process.env.ANTHROPIC_API_KEY,
+        api: 'anthropic-messages',
+        models: [
+            { id: 'claude-sonnet-4-5-20250514', name: 'claude-sonnet-4-5', contextWindow: 200000, maxTokens: 8192 },
+        ],
+    };
+    config.agents = config.agents || {};
+    config.agents.defaults = config.agents.defaults || {};
+    config.agents.defaults.model = { primary: 'anthropic/claude-sonnet-4-5-20250514' };
+    console.log('Provider override: using Anthropic (claude-sonnet-4-5) as default');
+}
+
 // Telegram configuration
 // Overwrite entire channel object to drop stale keys from old R2 backups
 // that would fail OpenClaw's strict config validation (see #47)
@@ -260,9 +296,99 @@ if (process.env.SLACK_BOT_TOKEN && process.env.SLACK_APP_TOKEN) {
     };
 }
 
+// Validate all providers have required baseUrl field.
+// Stale R2 backups or broken patches can leave providers without baseUrl,
+// which causes OpenClaw's config validation to reject the entire config.
+const DEFAULT_BASE_URLS = {
+    'openai-completions': 'https://api.openai.com/v1',
+    'anthropic-messages': 'https://api.anthropic.com',
+};
+
+if (config.models && config.models.providers) {
+    const providers = config.models.providers;
+    for (const [name, provider] of Object.entries(providers)) {
+        if (!provider.baseUrl) {
+            const defaultUrl = DEFAULT_BASE_URLS[provider.api];
+            if (defaultUrl) {
+                provider.baseUrl = defaultUrl;
+                console.log('Provider "' + name + '" missing baseUrl, set default: ' + defaultUrl);
+            } else {
+                delete providers[name];
+                console.log('Provider "' + name + '" missing baseUrl and no default available, removed');
+            }
+        }
+    }
+}
+
 fs.writeFileSync(configPath, JSON.stringify(config, null, 2));
 console.log('Configuration patched successfully');
+
+// Debug: log provider config for troubleshooting
+if (config.models && config.models.providers) {
+    for (const [name, p] of Object.entries(config.models.providers)) {
+        console.log('Provider "' + name + '": baseUrl=' + p.baseUrl + ', api=' + p.api + ', models=' + (p.models || []).length);
+    }
+}
+
+// Verify the written file is valid by reading it back
+try {
+    const written = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+    const provs = written.models && written.models.providers ? Object.keys(written.models.providers) : [];
+    const missingBaseUrl = provs.filter(k => !written.models.providers[k].baseUrl);
+    if (missingBaseUrl.length > 0) {
+        console.error('WARNING: providers still missing baseUrl after patch: ' + missingBaseUrl.join(', '));
+    } else {
+        console.log('Config verification passed (' + provs.length + ' providers, all have baseUrl)');
+    }
+} catch (verifyErr) {
+    console.error('Config verification failed:', verifyErr.message);
+}
 EOFPATCH
+
+# ============================================================
+# CLAWHUB SKILL INSTALLATION
+# ============================================================
+MANIFEST="/root/clawd/clawhub-skills.json"
+
+install_clawhub_skill() {
+    local slug="$1"
+    local version="$2"
+    local skill_name=$(echo "$slug" | sed 's|.*/||')
+
+    if [ -d "$SKILLS_DIR/$skill_name" ]; then
+        echo "[clawhub] $slug already installed, skipping"
+        return 0
+    fi
+
+    echo "[clawhub] Installing $slug${version:+ @$version}..."
+    local args="$slug --no-input --workdir $WORKSPACE_DIR"
+    [ -n "$version" ] && args="$args --version $version"
+
+    if clawhub install $args 2>&1; then
+        echo "[clawhub] Installed $slug"
+    else
+        echo "[clawhub] WARNING: Failed to install $slug"
+    fi
+}
+
+if [ -f "$MANIFEST" ]; then
+    echo "Installing ClawHub skills from manifest..."
+    node -e "
+      const m = JSON.parse(require('fs').readFileSync('$MANIFEST','utf8'));
+      (m.skills||[]).forEach(s => console.log(s.slug + '|' + (s.version||'')));
+    " | while IFS='|' read -r slug version; do
+        install_clawhub_skill "$slug" "$version"
+    done
+fi
+
+if [ -n "$CLAWHUB_EXTRA_SKILLS" ]; then
+    echo "Installing extra ClawHub skills from env..."
+    IFS=',' read -ra EXTRAS <<< "$CLAWHUB_EXTRA_SKILLS"
+    for slug in "${EXTRAS[@]}"; do
+        slug=$(echo "$slug" | xargs)
+        [ -n "$slug" ] && install_clawhub_skill "$slug" ""
+    done
+fi
 
 # ============================================================
 # BACKGROUND SYNC LOOP
